@@ -25,7 +25,7 @@ import tflite_runtime.interpreter as tflite
 
 
 
-class Live:
+class TickUnit:
 
 
     def __init__(self, tick=None):
@@ -37,16 +37,31 @@ class Live:
         self.quantile_thr = 0.01 #for RSI threshold affirmation - lower means tighter
         self.today = datetime.today().date()
         self.ticker = yf.Ticker(self.tick)
+        self.last_notification_sent = self.today-timedelta(days=1)
 
         # Paths
         self.rsi_diff_folder = Path.cwd() / 'data' / 'rsi_diff'
         self.net_path = Path.cwd() / 'networks' / f'{self.net_name}.tflite'
 
+        # Assert the tick
+        self._assert_tick()
+        self._fetch()
+
+
+    def infer(self):
+        ''' Model inference '''
+        self.last_infered = datetime.today()
         self._load()
-        self._fetch_hist()
+        self._fetch()
         self._data_process()
-        self._predict()
-        # print(self.df)
+        trigger = self._predict()
+        return trigger
+
+
+    def _assert_tick(self):
+        ''' Assert that the tick is available '''
+        _info = self.ticker.info
+        assert len(_info) > 1, f'Tick assertion failed: {self.tick} is not available'
 
 
     def _load(self):
@@ -73,18 +88,22 @@ class Live:
             self.rsi_diff_sell_thr[rsi_idx] = np.quantile(self.rsi_diff_sell[rsi_idx], 1-self.quantile_thr, axis=0) #generally positive
 
 
-    def _fetch_hist(self):
+    def _fetch(self):
         ''' FETCH HIST DATA '''
         self.df = self.ticker.history(start=self.today-timedelta(days=self.num_steps*3), end=self.today)
-        # self.df = self.df.iloc[len(self.df)-self.num_steps::]
-        # print(self.df)
-        # print(len(self.df))
-        # quit()
+        self._fetch_now()
+        self.df_org = self.df.copy()
         
         
     def _fetch_now(self):
         ''' FETCH LIVE DATA '''
-        self.now = self.ticker.history(start=self.today, end=self.today)
+        df_now = self.ticker.history(period='1d', interval='5m')
+        df_now.index = pd.to_datetime(df_now.index).tz_convert(None)
+        self.df = self.df.append(df_now.iloc[-1])
+
+
+    def get_last(self):
+        return self.df_org.iloc[-1]
 
 
     def _isoforest(self, df):
@@ -153,6 +172,9 @@ class Live:
         scaler = MinMaxScaler()
         self.df[columns_to_scale] = scaler.fit_transform(self.df[columns_to_scale])
 
+        # Round values
+        self.df = self.df.round(decimals=5)
+
         # Assert for scaling
         for col in self.df.columns:
             assert self.df[col].max() <= 1.0 , f'In {self.tick}, max value in {col} is {self.df[col].max()}, requires <= 1'
@@ -163,13 +185,9 @@ class Live:
     def _predict(self):
         ''' Prediction algo '''
 
-        # Load ProdEnv
-
-
         # Init trigger
-        trigger = Trigger()
+        trigger = Trigger(self.today)
         trigger.reset()
-
 
         ''' Net prediction '''
         # Convert to numpy and reshape
@@ -189,7 +207,7 @@ class Live:
         # Model certainty threshold
         if trigger.action in (1,2):
             if max(prediction) < 0.90:
-                trigger.set(f'Below model certainty threshold: {action} -> 0', 0)
+                trigger.set(f'Below model certainty threshold ({str(round(max(prediction),2))}): {action} -> 0', 0)
 
 
         ''' RSI threshold affirmation - if predicted hold '''
@@ -206,23 +224,25 @@ class Live:
 
         ''' MACD assertion '''
         if trigger.action==1 and self.df.MACDh_12_26_9.iloc[-1]>0:
-            trigger.set('MACD assertion: Failed on buy -> hold', 0)
+            trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on buy -> hold', 0)
         elif trigger.action==2 and self.df.MACDh_12_26_9.iloc[-1]<0:
-            trigger.set('MACD assertion: Failed on sell -> hold', 0)
+            trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on sell -> hold', 0)
 
 
         ''' --- COMMITED TO ACTION FROM THIS POINT --- '''
 
-        print(trigger.action)
+        return trigger
 
         
 
 
 class Trigger:
-    def __init__(self):
+    def __init__(self, today):
         self.desc = None
         self.override = False
         self.action = None
+        self.today = today
+        
 
     def set(self, description, action, override=False):
         if not self.override:
@@ -233,7 +253,8 @@ class Trigger:
     def render(self):
         print('='*10)
         print(f'Date: {self.today}')
-        print(f'Price: {self.today}')
+        print(f'Action: {self.action}')
+        print('='*10)
 
     def reset(self):
         self.desc = None
@@ -242,7 +263,7 @@ class Trigger:
 
 
 
-
 if __name__ == '__main__':
-    live = Live(tick='AAPL')
+    tick = TickUnit(tick='VOLV-B.ST')
+    tick.get_last()
     print(f'---> EOL: {__file__}')
