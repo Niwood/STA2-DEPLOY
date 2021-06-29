@@ -35,9 +35,9 @@ class TickUnit:
         self.net_name = '1624653692'
         self.num_steps = 90
         self.quantile_thr = 0.01 #for RSI threshold affirmation - lower means tighter
-        self.today = datetime.today().date()
+        self.now = datetime.today()
         self.ticker = yf.Ticker(self.tick)
-        self.last_notification_sent = self.today-timedelta(days=1)
+        self.last_notification_sent = datetime.today()-timedelta(hours=1)
 
         # Paths
         self.rsi_diff_folder = Path.cwd() / 'data' / 'rsi_diff'
@@ -72,8 +72,6 @@ class TickUnit:
         self.input_details = self.net.get_input_details()[0]
         self.output_details = self.net.get_output_details()[0]
 
-        
-
         ''' LOAD RSI DIFF '''
         with open(self.rsi_diff_folder / 'rsi_diff_sell.pkl', 'rb') as handle:
             self.rsi_diff_sell = pickle.load(handle)
@@ -90,7 +88,7 @@ class TickUnit:
 
     def _fetch(self):
         ''' FETCH HIST DATA '''
-        self.df = self.ticker.history(start=self.today-timedelta(days=self.num_steps*3), end=self.today)
+        self.df = self.ticker.history(start=self.now-timedelta(hours=self.num_steps*3), end=self.now)
         self._fetch_now()
         self.df_org = self.df.copy()
         
@@ -124,6 +122,10 @@ class TickUnit:
         # Insert anomalies
         df.insert(0, 'anomaly', predictions)
         df_org = df_org.join(df.anomaly)
+
+        df_org.insert(0, 'peak_anomaly', (df_org.anomaly & (df_org.RSI_14.diff() > 0)))
+        df_org.insert(0, 'valley_anomaly', (df_org.anomaly & (df_org.RSI_14.diff() < 0)))
+        df_org.drop(['anomaly'], axis=1, inplace=True)        
 
         return df_org
 
@@ -163,7 +165,7 @@ class TickUnit:
         self.df = self.df.reset_index(drop=False)
 
         # Choose columns for model input
-        cols = ['MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9', 'RSI_14','BBU_signal', 'BBL_signal', 'anomaly']
+        cols = ['MACD_12_26_9', 'MACDh_12_26_9', 'MACDs_12_26_9', 'RSI_14','BBU_signal', 'BBL_signal', 'peak_anomaly', 'valley_anomaly']
         self.df = self.df[cols]
 
         # Zscore and scale
@@ -260,6 +262,30 @@ class Trigger:
         self.desc = None
         self.override = False
 
+
+
+
+class Gain:
+
+    def __init__(self):
+        self.buy_price = 0
+        self.gain = 0
+        self.gains = list()
+
+    def update(self, price):
+        if self.buy_price > 0:
+            self.gain = (price / self.buy_price) - 1
+        else:
+            self.gain = 0
+        self.gains.append(self.gain)
+
+    def buy(self, buy_price):
+        self.buy_price = buy_price
+        # print('----> FROM GAIN:', self.buy_price)
+
+    def sell(self):
+        self.buy_price = 0
+        self.gain = 0
 
 
 

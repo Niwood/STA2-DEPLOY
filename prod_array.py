@@ -48,7 +48,7 @@ class Array:
         # password = 'ijF5!kkL23'
         password = '60TG5VxnXn42'
         message = """\
-        Subject: Test
+        Subject: STA2-PROD Notification
 
         This message is sent from Python.\n
 
