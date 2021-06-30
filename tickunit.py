@@ -7,11 +7,14 @@ from matplotlib.widgets import MultiCursor, RadioButtons, Button
 import matplotlib.dates as mdates
 import numpy as np
 from datetime import datetime, timedelta
+import pytz
 import glob
 from pathlib import Path
 from tqdm import tqdm
 import pickle
 import random
+
+from envprod import StockTradingEnv
 
 import yfinance as yf
 
@@ -32,12 +35,15 @@ class TickUnit:
 
         # Parameters
         self.tick = tick
-        self.net_name = '1624653692'
+        self.net_name = '1624913277'
         self.num_steps = 90
         self.quantile_thr = 0.01 #for RSI threshold affirmation - lower means tighter
-        self.now = datetime.today()
+        self.now = datetime.now(pytz.utc)
         self.ticker = yf.Ticker(self.tick)
-        self.last_notification_sent = datetime.today()-timedelta(hours=1)
+        self.last_notification_sent = datetime.now(pytz.utc)
+
+        # Gain
+        self.gain = Gain()
 
         # Paths
         self.rsi_diff_folder = Path.cwd() / 'data' / 'rsi_diff'
@@ -50,7 +56,7 @@ class TickUnit:
 
     def infer(self):
         ''' Model inference '''
-        self.last_infered = datetime.today()
+        self.last_infered = datetime.now(pytz.utc)
         self._load()
         self._fetch()
         self._data_process()
@@ -58,8 +64,14 @@ class TickUnit:
         return trigger
 
 
+    def backtest(self):
+        ''' Backtestning '''
+        pass
+
+
     def _assert_tick(self):
         ''' Assert that the tick is available '''
+        print(f'Asserting {self.tick} ..')
         _info = self.ticker.info
         assert len(_info) > 1, f'Tick assertion failed: {self.tick} is not available'
 
@@ -88,24 +100,37 @@ class TickUnit:
 
     def _fetch(self):
         ''' FETCH HIST DATA '''
-        self.df = self.ticker.history(start=self.now-timedelta(hours=self.num_steps*3), end=self.now)
+        self.df = self.ticker.history(start=self.now-timedelta(hours=self.num_steps*10), end=self.now, interval='1h').tz_convert('UTC')
         self._fetch_now()
+
+
         self.df_org = self.df.copy()
-        
+
         
     def _fetch_now(self):
         ''' FETCH LIVE DATA '''
-        df_now = self.ticker.history(period='1d', interval='5m')
-        df_now.index = pd.to_datetime(df_now.index).tz_convert(None)
+        df_now = self.ticker.history(period='1d', interval='5m').tz_convert('UTC')
+        df_now_whole_hours  = df_now[df_now.index.minute == 0].copy()
+
+
+        # Append missing last hour
+        self.df = self.df.append(df_now_whole_hours.iloc[-1])
+
+        # Append latest reading
         self.df = self.df.append(df_now.iloc[-1])
+
+        # Drop rows with duplicated indicies - same timestamp
+        self.df = self.df[~self.df.index.duplicated(keep='first')]
 
 
     def get_last(self):
         return self.df_org.iloc[-1]
 
 
+
     def _isoforest(self, df):
         ''' Generate anomalie detection based in isolation forest '''
+        
         df_org = df.copy()
 
         df['RSI_SMA'] = df.RSI_14.rolling(window=5).mean()
@@ -125,13 +150,14 @@ class TickUnit:
 
         df_org.insert(0, 'peak_anomaly', (df_org.anomaly & (df_org.RSI_14.diff() > 0)))
         df_org.insert(0, 'valley_anomaly', (df_org.anomaly & (df_org.RSI_14.diff() < 0)))
-        df_org.drop(['anomaly'], axis=1, inplace=True)        
+        df_org.drop(['anomaly'], axis=1, inplace=True)
 
         return df_org
 
 
     def _data_process(self):
         ''' DATA PRE-PROCESSING '''
+
         # MACD
         self.df.ta.macd(fast=12, slow=26, append=True)
 
@@ -185,11 +211,17 @@ class TickUnit:
 
 
     def _predict(self):
+
         ''' Prediction algo '''
+        current_price = round(self.df_org.Close.iloc[-1], 3)
+
+        # Update gain
+        self.gain.update(current_price)
 
         # Init trigger
-        trigger = Trigger(self.today)
+        trigger = Trigger()
         trigger.reset()
+
 
         ''' Net prediction '''
         # Convert to numpy and reshape
@@ -233,17 +265,23 @@ class TickUnit:
 
         ''' --- COMMITED TO ACTION FROM THIS POINT --- '''
 
+        if trigger.action == 1:
+            self.gain.buy(current_price)
+
+        elif trigger.action == 2:
+            self.gain.sell()
+
+
         return trigger
 
         
 
 
 class Trigger:
-    def __init__(self, today):
+    def __init__(self):
         self.desc = None
         self.override = False
         self.action = None
-        self.today = today
         
 
     def set(self, description, action, override=False):
@@ -254,7 +292,6 @@ class Trigger:
 
     def render(self):
         print('='*10)
-        print(f'Date: {self.today}')
         print(f'Action: {self.action}')
         print('='*10)
 
@@ -271,6 +308,7 @@ class Gain:
         self.buy_price = 0
         self.gain = 0
         self.gains = list()
+        self.position = 'out'
 
     def update(self, price):
         if self.buy_price > 0:
@@ -281,11 +319,12 @@ class Gain:
 
     def buy(self, buy_price):
         self.buy_price = buy_price
-        # print('----> FROM GAIN:', self.buy_price)
+        self.position = 'in'
 
     def sell(self):
         self.buy_price = 0
         self.gain = 0
+        self.position = 'out'
 
 
 
