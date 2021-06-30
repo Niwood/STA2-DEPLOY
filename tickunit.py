@@ -14,7 +14,6 @@ from tqdm import tqdm
 import pickle
 import random
 
-from envprod import StockTradingEnv
 
 import yfinance as yf
 
