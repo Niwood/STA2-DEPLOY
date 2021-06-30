@@ -8,14 +8,17 @@ import matplotlib.dates as mdates
 import numpy as np
 from datetime import datetime, timedelta
 import pytz
+from pytz import timezone
 import glob
 from pathlib import Path
 from tqdm import tqdm
 import pickle
 import random
+import json
 
 
 import yfinance as yf
+import pandas_market_calendars as mcal
 
 from scipy.stats import zscore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
@@ -40,39 +43,146 @@ class TickUnit:
         self.now = datetime.now(pytz.utc)
         self.ticker = yf.Ticker(self.tick)
         self.last_notification_sent = datetime.now(pytz.utc)
+        self.last_infered = None
+
+        # Market flags
+        self.market_open = None
+        self.next_market_open = None
+
+        # Meta data
+        self.compnay_name = None
+        self.exchange = None
+        self.exchange_timezone = None
+        self.sector = None
+        self.currency = None
+
+        # Trigger
+        self.trigger = Trigger()
 
         # Gain
         self.gain = Gain()
 
         # Paths
+        self.config_path = Path.cwd() / 'config_files'
         self.rsi_diff_folder = Path.cwd() / 'data' / 'rsi_diff'
         self.net_path = Path.cwd() / 'networks' / f'{self.net_name}.tflite'
 
         # Assert the tick
         self._assert_tick()
+
+        # Load config file if available
+        self._load_config()
+
+        # Make an initial fetch
         self._fetch()
+
+        # Load network nad RSI diff
+        self._load()
 
 
     def infer(self):
         ''' Model inference '''
+
+        # Update last infered
         self.last_infered = datetime.now(pytz.utc)
-        self._load()
+
+        # Fetch data and process
         self._fetch()
         self._data_process()
-        trigger = self._predict()
-        return trigger
 
+        # Predict
+        self._predict()
 
-    def backtest(self):
-        ''' Backtestning '''
-        pass
+        # Save config file - has to be after predict
+        self._save_config()
 
 
     def _assert_tick(self):
-        ''' Assert that the tick is available '''
+        ''' Assert that the tick is available and save meta data '''
+
         print(f'Asserting {self.tick} ..')
-        _info = self.ticker.info
-        assert len(_info) > 1, f'Tick assertion failed: {self.tick} is not available'
+        company_info = self.ticker.info
+        
+        assert len(company_info) > 1, f'Tick assertion failed: {self.tick} is not available'
+
+        self.compnay_name = company_info['shortName']
+        self.exchange = company_info['exchange']
+        self.exchange_timezone = company_info['exchangeTimezoneName']
+        self.sector = company_info['sector']
+        self.currency = company_info['currency']
+
+
+    def _load_config(self):
+        ''' Load config file '''
+
+        try:
+            with open(self.config_path / f'{self.tick}.json') as json_file:
+                data = json.load(json_file)
+        except:
+            return
+
+        self.gain.buy_price = data['buy_price']
+        self.gain.gain = data['gain']
+        self.gain.gains = data['gains']
+        self.gain.position = data['position']
+
+
+    def _save_config(self):
+        ''' Save config file '''
+
+        data = {
+            'buy_price': self.gain.buy_price,
+            'gain': self.gain.gain,
+            'gains': self.gain.gains,
+            'position': self.gain.position
+        }
+        
+        with open(self.config_path / f'{self.tick}.json', 'w') as outfile:
+            json.dump(data, outfile)
+
+
+    def check_market_open(self):
+        ''' Determines if the market is open, if not when will it open '''
+
+        # Get timezone of the exchange
+        tz_exchange = timezone(self.exchange_timezone)
+
+        # Set market calendar - (X+STO)
+        market_calendar = mcal.get_calendar('X'+self.exchange)
+
+        # Get the schedule
+        schedule = market_calendar.schedule(
+            start_date=datetime.now(tz_exchange).date(),
+            end_date=(datetime.now(tz_exchange)+timedelta(days=10)).date()
+            )
+
+        # Is the market is open this date
+        try:
+            schedule_today = schedule.loc[
+                str(datetime.now(pytz.utc).date())
+                ]
+            _is_market_open_today = True
+        except:
+            _is_market_open_today = False
+
+        # Is the market is open at this time
+        if _is_market_open_today:
+            market_open = schedule_today.market_open < datetime.now(pytz.utc) < schedule_today.market_close
+        else:
+            market_open = False
+        
+        # When will be the next time the market opens
+        if _is_market_open_today:
+            schedule_next_day = schedule.iloc[1]
+        else:
+            schedule_next_day = schedule.iloc[0]
+
+        next_market_open = schedule_next_day.market_open
+
+        # print('next_market_open: ',self.next_market_open)
+        # print('market open:',self.market_open)
+        # quit()
+        return market_open, next_market_open
 
 
     def _load(self):
@@ -124,7 +234,6 @@ class TickUnit:
 
     def get_last(self):
         return self.df_org.iloc[-1]
-
 
 
     def _isoforest(self, df):
@@ -217,9 +326,8 @@ class TickUnit:
         # Update gain
         self.gain.update(current_price)
 
-        # Init trigger
-        trigger = Trigger()
-        trigger.reset()
+        # Reset trigger
+        self.trigger.reset()
 
 
         ''' Net prediction '''
@@ -235,54 +343,53 @@ class TickUnit:
         self.net.invoke()
         prediction = self.net.get_tensor(self.output_details['index'])[0]
         action = np.argmax(prediction)
-        trigger.set(f'Model predicts: {action}', action, override=False)
+        self.trigger.set(f'Model predicts: {action}', action, override=False)
 
         # Model certainty threshold
-        if trigger.action in (1,2):
+        if self.trigger.action in (1,2):
             if max(prediction) < 0.90:
-                trigger.set(f'Below model certainty threshold ({str(round(max(prediction),2))}): {action} -> 0', 0)
+                self.trigger.set(f'Below model certainty threshold ({str(round(max(prediction),2))}): {action} -> 0', 0)
 
 
         ''' RSI threshold affirmation - if predicted hold '''
-        if trigger.action == 0:
+        if self.trigger.action == 0:
             for rsi_idx in self.rsi_diff_buy.keys(): #any of the buy/sell keys are ok since they are the same
                 rsi_grad = (self.df.RSI_14.iloc[-1] - self.df.RSI_14.iloc[-int(rsi_idx)-1]) / rsi_idx
 
                 if rsi_grad < self.rsi_diff_buy_thr[rsi_idx] and self.env.shares_held==0:
-                    trigger.set(f'RSI threshold affirmation: Below {self.quantile_thr*100}% {rsi_idx} day(s) threshold -> buy', 1, override=False)
+                    self.trigger.set(f'RSI threshold affirmation: Below {self.quantile_thr*100}% {rsi_idx} day(s) threshold -> buy', 1, override=False)
 
                 elif rsi_grad > self.rsi_diff_sell_thr[rsi_idx] and self.env.shares_held>0:
-                    trigger.set(f'RSI threshold affirmation: Above {(1-self.quantile_thr)*100}% {rsi_idx} day(s) threshold -> sell', 2, override=False)
+                    self.trigger.set(f'RSI threshold affirmation: Above {(1-self.quantile_thr)*100}% {rsi_idx} day(s) threshold -> sell', 2, override=False)
 
 
         ''' MACD assertion '''
-        if trigger.action==1 and self.df.MACDh_12_26_9.iloc[-1]>0:
-            trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on buy -> hold', 0)
-        elif trigger.action==2 and self.df.MACDh_12_26_9.iloc[-1]<0:
-            trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on sell -> hold', 0)
+        if self.trigger.action==1 and self.df.MACDh_12_26_9.iloc[-1]>0:
+            self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on buy -> hold', 0)
+        elif self.trigger.action==2 and self.df.MACDh_12_26_9.iloc[-1]<0:
+            self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on sell -> hold', 0)
 
 
         ''' --- COMMITED TO ACTION FROM THIS POINT --- '''
 
-        if trigger.action == 1:
+        if self.trigger.action == 1:
             self.gain.buy(current_price)
 
-        elif trigger.action == 2:
+        elif self.trigger.action == 2:
             self.gain.sell()
 
 
-        return trigger
 
         
 
 
 class Trigger:
+
     def __init__(self):
         self.desc = None
         self.override = False
         self.action = None
         
-
     def set(self, description, action, override=False):
         if not self.override:
             self.desc = description
@@ -329,5 +436,5 @@ class Gain:
 
 if __name__ == '__main__':
     tick = TickUnit(tick='VOLV-B.ST')
-    tick.get_last()
+    tick.infer()
     print(f'---> EOL: {__file__}')
