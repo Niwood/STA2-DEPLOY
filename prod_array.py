@@ -111,15 +111,15 @@ class Array:
             # Reset table
             table_body = list()
             table_headers = [
-                'Tick',
-                'Company Name',
-                'Exchange',
-                'Position',
-                'Action',
-                'Price',
-                'Currency',
-                'Gain',
-                'Market Open'
+                'TICK',
+                'EXC',
+                'POS',
+                'TRIGGER',
+                'TRIGGER DESC',
+                'PRICE',
+                'POSITION GAIN',
+                'D.RETURN',
+                'MARKET'
                 ]
             
             try:
@@ -136,6 +136,10 @@ class Array:
                         
                     # Get trigger
                     trigger = unit.trigger
+                    if trigger.action == 0:
+                        _trigger_desc = Back.YELLOW + Fore.BLACK + trigger.action_desc + Style.RESET_ALL
+                    elif trigger.action in (1,2):
+                        _trigger_desc = Back.RED + Fore.BLACK + trigger.action_desc + Style.RESET_ALL
 
                     # Reporting
                     self.report['tick'] = unit.tick
@@ -148,33 +152,28 @@ class Array:
                     self.report['market_open'] = market_open
                     self.report['next_market_open'] = next_market_open
 
-                    # Console print
-                    # if trigger.action in (1,2):
-                    #     print(Fore.RED)
-                    # pprint.pprint(self.report)
-                    # print(Style.RESET_ALL)
-                    # print('-'*10)
 
                     '''
-                    'Tick',
-                    'Company Name',
-                    'Exchange',
-                    'Position',
-                    'Action',
-                    'Price',
-                    'Currency',
-                    'Gain',
-                    'Market Open'
+                    'TICK',
+                    'EXCHANGE',
+                    'POSITION',
+                    'ACTION',
+                    'TRIGGER DESC'
+                    'LAST PRICE',
+                    'POSITION GAIN',
+                    'DAILY RETURN',
+                    'MARKET'
                     '''
+                    _daily_return = round(unit.get_daily_return()*100,1)
                     table_body.append([
                         unit.tick,
-                        unit.compnay_name[0:15],
                         unit.exchange,
                         Fore.YELLOW + unit.gain.position + Style.RESET_ALL if unit.gain.position=='out' else Back.YELLOW + Fore.BLACK + unit.gain.position + Style.RESET_ALL,
-                        trigger.action,
-                        round(unit.get_last().Close,1),
-                        unit.currency,
-                        Back.GREEN + Fore.BLACK + str(unit.gain.gain) + Style.RESET_ALL if unit.gain.gain>=0 else Back.RED + Fore.BLACK + str(unit.gain.gain) + Style.RESET_ALL,
+                        _trigger_desc,
+                        trigger.desc,
+                        f'{unit.currency} {str(round(unit.get_last().Close,1))}',
+                        Back.GREEN + Fore.BLACK + str(round(unit.gain.gain*100,2)) + '%' + Style.RESET_ALL if unit.gain.gain>=0 else Back.RED + Fore.BLACK + str(round(unit.gain.gain*100,2)) + '%' + Style.RESET_ALL,
+                        Fore.GREEN + str(_daily_return) + '%' + Style.RESET_ALL if _daily_return>=0 else Fore.RED + str(_daily_return) + '%' + Style.RESET_ALL,
                         Back.GREEN + Fore.BLACK + 'Open' + Style.RESET_ALL if market_open else Back.RED + Fore.BLACK + 'Closed' + Style.RESET_ALL
                         ])
                     
@@ -184,19 +183,10 @@ class Array:
                         self._notify('Trigger', text='', append_report=True)
                         unit.last_notification_sent = datetime.now(pytz.utc)
 
-                # Console print - inference completed
-                # sys.stdout.write("\r")
-                # sys.stdout.write(
-                #     tabulate(table_body, table_headers, tablefmt="fancy_grid")
-                #     )
-                # sys.stdout.flush()
 
-                # sys.stdout.write("\r")
-                # sys.stdout.write(Fore.BLUE + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
-                # sys.stdout.flush()
                 print(tabulate(table_body, table_headers, tablefmt="fancy_grid"))
-                print('\n')
                 print(Fore.MAGENTA + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
+                print('\n')
   
 
             except Exception as e:
@@ -258,9 +248,9 @@ class Array:
 
 
 if __name__ == '__main__':
-    tickers = ['ERIC-B.ST', 'VOLV-B.ST', 'AZN.ST', 'SAND.ST', 'TEL2-B.ST', 'HM-B.ST', 'SEB-A.ST', 'INVE-A.ST', 'AZN.ST', 'LUNE.ST']
-    tickers = ['VOLV-B.ST', 'AZN.ST', 'SAND.ST']
-    update_rate = 5
+    tickers = ['ERIC-B.ST', 'VOLV-B.ST', 'AZN.ST', 'SAND.ST', 'TEL2-B.ST', 'HM-B.ST', 'SEB-A.ST', 'INVE-A.ST', 'LUNE.ST']
+    # tickers = ['ERIC-B.ST']
+    update_rate = 1
 
     array = Array(tickers=tickers, update_rate=update_rate)
     array.mute = True #True if notifications should be muted

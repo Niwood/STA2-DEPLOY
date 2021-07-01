@@ -15,6 +15,7 @@ from tqdm import tqdm
 import pickle
 import random
 import json
+import time
 
 
 import yfinance as yf
@@ -110,6 +111,7 @@ class TickUnit:
         self.exchange_timezone = company_info['exchangeTimezoneName']
         self.sector = company_info['sector']
         self.currency = company_info['currency']
+        time.sleep(1)
 
 
     def _load_config(self):
@@ -209,10 +211,17 @@ class TickUnit:
 
     def _fetch(self):
         ''' FETCH HIST DATA '''
-        self.df = self.ticker.history(start=self.now-timedelta(hours=self.num_steps*10), end=self.now, interval='1h').tz_convert('UTC')
-        self._fetch_now()
-
-
+        fetched = False
+        while not fetched:
+            try:
+                self.df = self.ticker.history(start=self.now-timedelta(hours=self.num_steps*10), end=self.now, interval='1h').tz_convert('UTC')
+                self._fetch_now()
+                fetched = True
+            except:
+                print(f'Not able to fetch {self.tick}, will retry in 5 seconds')
+                time.sleep(5)
+        
+        # Save original
         self.df_org = self.df.copy()
 
         
@@ -236,6 +245,15 @@ class TickUnit:
         return self.df_org.iloc[-1]
 
 
+    def get_daily_return(self):
+        df_today = self.df_org.loc[str(datetime.now(pytz.utc).date())]
+        if not df_today.empty:
+            _daily_return = (df_today.Close.iloc[-1] / df_today.Close.iloc[0]) - 1
+            return _daily_return
+        else:
+            return 0
+
+
     def _isoforest(self, df):
         ''' Generate anomalie detection based in isolation forest '''
         
@@ -249,7 +267,7 @@ class TickUnit:
         df = df[cols]
         
         # Isolation Forest prediction
-        clf = IsolationForest(contamination=0.08, bootstrap=False, max_samples=0.99, n_estimators=200).fit(df)
+        clf = IsolationForest(contamination=0.3, bootstrap=False, max_samples=0.99, n_estimators=200).fit(df)
         predictions = clf.predict(df) == -1
 
         # Insert anomalies
@@ -343,26 +361,33 @@ class TickUnit:
         self.net.invoke()
         prediction = self.net.get_tensor(self.output_details['index'])[0]
         action = np.argmax(prediction)
-        self.trigger.set(f'Model predicts: {action}', action, override=False)
+        self.trigger.set(f'Net: {action}', action, override=False)
 
         # Model certainty threshold
         if self.trigger.action in (1,2):
             if max(prediction) < 0.90:
-                self.trigger.set(f'Below model certainty threshold ({str(round(max(prediction),2))}): {action} -> 0', 0)
+                self.trigger.set(f'Net thrs ({str(round(max(prediction),2))}): {action} -> 0', 0)
 
 
         ''' MACD assertion '''
         if self.trigger.action==1 and self.df.MACDh_12_26_9.iloc[-1]>0:
-            self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on buy -> hold', 0)
+            self.trigger.set(f'MACDh ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): buy -> hold', 0)
         elif self.trigger.action==2 and self.df.MACDh_12_26_9.iloc[-1]<0:
-            self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on sell -> hold', 0)
+            self.trigger.set(f'MACDh ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): sell -> hold', 0)
+
+
+        ''' Stop loss assertion - only if a buy action has been performed '''
+        if self.trigger.action != 2 and self.gain.position=='in' and self.gain.gain>=0.03:
+            self.trigger.set(f'InvStopLoss ({str(round(self.gain.gain,3))}): {self.trigger.action} -> 2', 2)
+        elif self.trigger.action != 2 and self.gain.position=='in' and self.gain.gain<-0.02:
+            self.trigger.set(f'StopLoss ({str(round(self.gain.gain,3))}): {self.trigger.action} -> 2', 2)
 
 
         ''' Compare trigger action to current position '''
-        if self.trigger.action == 1 and self.gain.position = 'in':
-            self.trigger.set(f'Trigger set to {self.trigger.action} but position {self.gain.position} --> hold', 0)
-        elif self.trigger.action == 2 and self.gain.position = 'out'
-            self.trigger.set(f'Trigger set to {self.trigger.action} but position {self.gain.position} --> hold', 0)
+        if self.trigger.action == 1 and self.gain.position == 'in':
+            self.trigger.set(f'Trigger {self.trigger.action} redundant --> hold', 0)
+        elif self.trigger.action == 2 and self.gain.position == 'out':
+            self.trigger.set(f'Trigger {self.trigger.action} redundant --> hold', 0)
 
 
         ''' --- COMMITED TO ACTION FROM THIS POINT --- '''
@@ -382,23 +407,27 @@ class Trigger:
         self.desc = None
         self.override = False
         self.action = None
+        self.set_action_desc()
         
     def set(self, description, action, override=False):
         if not self.override:
             self.desc = description
             self.override = override
             self.action = action
-
-    def render(self):
-        print('='*10)
-        print(f'Action: {self.action}')
-        print('='*10)
+            self.set_action_desc()
 
     def reset(self):
         self.desc = None
         self.override = False
+        self.set_action_desc()
 
-
+    def set_action_desc(self):
+        if self.action == 1:
+            self.action_desc = 'buy'
+        elif self.action == 2:
+            self.action_desc = 'sell'
+        else:
+            self.action_desc = 'hold'
 
 
 class Gain:
@@ -428,6 +457,7 @@ class Gain:
 
 
 if __name__ == '__main__':
-    tick = TickUnit(tick='VOLV-B.ST')
-    tick.infer()
+    tick = TickUnit(tick='ERIC-B.ST')
+    tick.get_daily_return()
+    # tick.infer()
     print(f'---> EOL: {__file__}')
