@@ -114,7 +114,6 @@ class Array:
                 'Tick',
                 'Company Name',
                 'Exchange',
-                'Sector',
                 'Position',
                 'Action',
                 'Price',
@@ -160,7 +159,6 @@ class Array:
                     'Tick',
                     'Company Name',
                     'Exchange',
-                    'Sector',
                     'Position',
                     'Action',
                     'Price',
@@ -170,9 +168,8 @@ class Array:
                     '''
                     table_body.append([
                         unit.tick,
-                        unit.compnay_name,
+                        unit.compnay_name[0:15],
                         unit.exchange,
-                        unit.sector,
                         Fore.YELLOW + unit.gain.position + Style.RESET_ALL if unit.gain.position=='out' else Back.YELLOW + Fore.BLACK + unit.gain.position + Style.RESET_ALL,
                         trigger.action,
                         round(unit.get_last().Close,1),
@@ -199,7 +196,7 @@ class Array:
                 # sys.stdout.flush()
                 print(tabulate(table_body, table_headers, tablefmt="fancy_grid"))
                 print('\n')
-                print(Fore.BLUE + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
+                print(Fore.MAGENTA + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
   
 
             except Exception as e:
@@ -263,7 +260,7 @@ class Array:
 if __name__ == '__main__':
     tickers = ['ERIC-B.ST', 'VOLV-B.ST', 'AZN.ST', 'SAND.ST', 'TEL2-B.ST', 'HM-B.ST', 'SEB-A.ST', 'INVE-A.ST', 'AZN.ST', 'LUNE.ST']
     tickers = ['VOLV-B.ST', 'AZN.ST', 'SAND.ST']
-    update_rate = 1
+    update_rate = 5
 
     array = Array(tickers=tickers, update_rate=update_rate)
     array.mute = True #True if notifications should be muted

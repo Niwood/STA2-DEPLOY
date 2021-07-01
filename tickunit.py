@@ -136,7 +136,7 @@ class TickUnit:
             'gains': self.gain.gains,
             'position': self.gain.position
         }
-        
+
         with open(self.config_path / f'{self.tick}.json', 'w') as outfile:
             json.dump(data, outfile)
 
@@ -351,23 +351,18 @@ class TickUnit:
                 self.trigger.set(f'Below model certainty threshold ({str(round(max(prediction),2))}): {action} -> 0', 0)
 
 
-        ''' RSI threshold affirmation - if predicted hold '''
-        if self.trigger.action == 0:
-            for rsi_idx in self.rsi_diff_buy.keys(): #any of the buy/sell keys are ok since they are the same
-                rsi_grad = (self.df.RSI_14.iloc[-1] - self.df.RSI_14.iloc[-int(rsi_idx)-1]) / rsi_idx
-
-                if rsi_grad < self.rsi_diff_buy_thr[rsi_idx] and self.env.shares_held==0:
-                    self.trigger.set(f'RSI threshold affirmation: Below {self.quantile_thr*100}% {rsi_idx} day(s) threshold -> buy', 1, override=False)
-
-                elif rsi_grad > self.rsi_diff_sell_thr[rsi_idx] and self.env.shares_held>0:
-                    self.trigger.set(f'RSI threshold affirmation: Above {(1-self.quantile_thr)*100}% {rsi_idx} day(s) threshold -> sell', 2, override=False)
-
-
         ''' MACD assertion '''
         if self.trigger.action==1 and self.df.MACDh_12_26_9.iloc[-1]>0:
             self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on buy -> hold', 0)
         elif self.trigger.action==2 and self.df.MACDh_12_26_9.iloc[-1]<0:
             self.trigger.set(f'MACD assertion ({str(round(self.df.MACDh_12_26_9.iloc[-1],2))}): Failed on sell -> hold', 0)
+
+
+        ''' Compare trigger action to current position '''
+        if self.trigger.action == 1 and self.gain.position = 'in':
+            self.trigger.set(f'Trigger set to {self.trigger.action} but position {self.gain.position} --> hold', 0)
+        elif self.trigger.action == 2 and self.gain.position = 'out'
+            self.trigger.set(f'Trigger set to {self.trigger.action} but position {self.gain.position} --> hold', 0)
 
 
         ''' --- COMMITED TO ACTION FROM THIS POINT --- '''
@@ -379,8 +374,6 @@ class TickUnit:
             self.gain.sell()
 
 
-
-        
 
 
 class Trigger:
