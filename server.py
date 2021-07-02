@@ -5,9 +5,10 @@ import numpy as np
 import pandas as pd
 from tickunit import TickUnit
 import time
+import json
+from pathlib import Path
 from datetime import datetime
 import pytz
-import pprint
 import smtplib, ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -16,6 +17,8 @@ from colorama import init as colorama_init
 colorama_init()
 from colorama import Fore, Back, Style
 from tabulate import tabulate
+
+
 
 class Array:
     '''
@@ -49,6 +52,9 @@ class Array:
 
         # Metadata
         self.tz_local = pytz.timezone('Europe/Stockholm')
+
+        # Paths
+        self.status_files_path = Path.cwd() / 'status_files'
         
 
 
@@ -136,7 +142,7 @@ class Array:
                         
                     # Get trigger
                     trigger = unit.trigger
-                    if trigger.action == 0:
+                    if trigger.action in (0, None):
                         _trigger_desc = Back.YELLOW + Fore.BLACK + trigger.action_desc + Style.RESET_ALL
                     elif trigger.action in (1,2):
                         _trigger_desc = Back.RED + Fore.BLACK + trigger.action_desc + Style.RESET_ALL
@@ -183,16 +189,22 @@ class Array:
                         self._notify('Trigger', text='', append_report=True)
                         unit.last_notification_sent = datetime.now(pytz.utc)
 
-
-                print(tabulate(table_body, table_headers, tablefmt="fancy_grid"))
-                print(Fore.MAGENTA + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
-                print('\n')
+                # Save table data to json
+                with open(self.status_files_path / 'table.json', 'w') as outfile:
+                    json.dump(
+                        {'table_body':table_body, 'table_headers':table_headers, 'table_id':time.time()},
+                        outfile
+                        )
+                # Save inference info to json
+                with open(self.status_files_path / 'inference_info.json', 'w') as outfile:
+                    json.dump(
+                        {'idle':False, 'last_inference':str(datetime.now(pytz.utc))},
+                        outfile
+                        )
   
 
             except Exception as e:
-                print(Fore.RED)
                 print(traceback.print_tb(e.__traceback__))
-                print(Style.RESET_ALL)
                 self._notify(
                     'Error during inference',
                     text=f'''
@@ -210,15 +222,11 @@ class Array:
             if not any(market_open_all) and self.respect_market_hours:
                 
                 next_market_open_min = min(next_market_open_all)
-                
-
-                print(Fore.YELLOW)
                 print(f'Market is closed and inference is set to idle.')
                 print(f'Next market opening: {next_market_open_min} UTC | {next_market_open_min.tz_convert(self.tz_local)} {self.tz_local.zone}')
-                
 
                 while True:
-                    
+
                     seconds_until_start = (next_market_open_min - datetime.now(pytz.utc)).seconds - (self.update_rate*60)
                     if seconds_until_start <= 0:
                         break
@@ -231,12 +239,16 @@ class Array:
                     seconds_until_start %= 60
                     seconds = seconds_until_start
 
-                    sys.stdout.write("\r")
-                    sys.stdout.write(f'Time until opening: {day} days - {hour} hours - {minutes} min - {seconds} seconds')
-                    sys.stdout.flush()
+                    # Save inference info to json
+                    with open(self.status_files_path / 'inference_info.json', 'w') as outfile:
+                        json.dump(
+                            {'idle':True, 'next_market_open':str(next_market_open_min), 'day':day, 'hour':hour, 'minutes':minutes, 'seconds':seconds},
+                            outfile
+                            )
+
+
                     time.sleep(1)
                     
-                print(Style.RESET_ALL)
 
 
 
@@ -249,11 +261,11 @@ class Array:
 
 if __name__ == '__main__':
     tickers = ['ERIC-B.ST', 'VOLV-B.ST', 'AZN.ST', 'SAND.ST', 'TEL2-B.ST', 'HM-B.ST', 'SEB-A.ST', 'INVE-A.ST', 'LUNE.ST']
-    # tickers = ['ERIC-B.ST']
+    # tickers = ['SAND.ST']
     update_rate = 1
 
     array = Array(tickers=tickers, update_rate=update_rate)
-    array.mute = True #True if notifications should be muted
+    array.mute = False #True if notifications should be muted
     array.respect_market_hours = True #True if inference should be idle off-market
     array.run()
     print(f'---> EOL: {__file__}')

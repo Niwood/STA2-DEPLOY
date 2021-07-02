@@ -47,8 +47,8 @@ class TickUnit:
         self.last_infered = None
 
         # Market flags
-        self.market_open = None
-        self.next_market_open = None
+        # self.market_open = None
+        # self.next_market_open = None
 
         # Meta data
         self.compnay_name = None
@@ -104,13 +104,21 @@ class TickUnit:
         print(f'Asserting {self.tick} ..')
         company_info = self.ticker.info
         
-        assert len(company_info) > 1, f'Tick assertion failed: {self.tick} is not available'
+        if len(company_info) > 1:
+            self.compnay_name = company_info['shortName']
+            self.exchange = company_info['exchange']
+            self.exchange_timezone = company_info['exchangeTimezoneName']
+            self.sector = company_info['sector']
+            self.currency = company_info['currency']
+        else:
+            # assert True, f'Tick assertion failed: {self.tick}. Company info: {company_info}'
+            print(f'Tick assertion failed: {self.tick}. Company info: {company_info}. AUTOFILL ..')
+            self.compnay_name = self.tick
+            self.exchange = 'STO'
+            self.exchange_timezone = 'Europe/Stockholm'
+            self.sector = 'Unknown'
+            self.currency = 'SEK'
 
-        self.compnay_name = company_info['shortName']
-        self.exchange = company_info['exchange']
-        self.exchange_timezone = company_info['exchangeTimezoneName']
-        self.sector = company_info['sector']
-        self.currency = company_info['currency']
         time.sleep(1)
 
 
@@ -175,14 +183,19 @@ class TickUnit:
         
         # When will be the next time the market opens
         if _is_market_open_today:
-            schedule_next_day = schedule.iloc[1]
+            # If market is open today but not yet
+            if datetime.now(pytz.utc) < schedule_today.market_open:
+                schedule_next_day = schedule.iloc[0]
+            else: # If market is open today but has closed
+                schedule_next_day = schedule.iloc[1]
         else:
             schedule_next_day = schedule.iloc[0]
 
         next_market_open = schedule_next_day.market_open
 
-        # print('next_market_open: ',self.next_market_open)
-        # print('market open:',self.market_open)
+        # print('_is_market_open_today',_is_market_open_today)
+        # print('next_market_open: ',next_market_open)
+        # print('market open:',market_open)
         # quit()
         return market_open, next_market_open
 
@@ -246,11 +259,11 @@ class TickUnit:
 
 
     def get_daily_return(self):
-        df_today = self.df_org.loc[str(datetime.now(pytz.utc).date())]
-        if not df_today.empty:
-            _daily_return = (df_today.Close.iloc[-1] / df_today.Close.iloc[0]) - 1
+        try:
+            df_today = self.df_org.loc[str(datetime.now(pytz.utc).date())]
+            _daily_return = (df_today.Open.iloc[-1] / df_today.Close.iloc[0]) - 1
             return _daily_return
-        else:
+        except:
             return 0
 
 
@@ -458,6 +471,7 @@ class Gain:
 
 if __name__ == '__main__':
     tick = TickUnit(tick='ERIC-B.ST')
-    tick.get_daily_return()
+    # tick.get_daily_return()
+    print(tick.check_market_open())
     # tick.infer()
     print(f'---> EOL: {__file__}')
