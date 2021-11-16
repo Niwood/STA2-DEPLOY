@@ -31,12 +31,22 @@ class Status:
         ''' Read json files '''
 
         # Read table
-        with open(self.status_files_path / 'table.json') as jfile:
-            self.table_data = json.load(jfile)
+        while True:
+            try:
+                with open(self.status_files_path / 'table.json') as jfile:
+                    self.table_data = json.load(jfile)
+                break
+            except:
+                time.sleep(0.5)
 
         # Read inference info
-        with open(self.status_files_path / 'inference_info.json') as jfile:
-            self.inference_data = json.load(jfile)
+        while True:
+            try:
+                with open(self.status_files_path / 'inference_info.json') as jfile:
+                    self.inference_data = json.load(jfile)
+                break
+            except:
+                time.sleep(0.5)
 
 
     def run(self):
@@ -44,14 +54,13 @@ class Status:
         while True:
             # Read
             self.read()
-            # print(self.inference_data), quit()
+            # print(self.table_data), quit()
 
             # Print table
             if self.table_data['table_id'] != self.printed_table_id:
                 print(tabulate(self.table_data['table_body'], self.table_data['table_headers'], tablefmt="fancy_grid"))
                 self.printed_table_id = self.table_data['table_id']
-            # print(Fore.MAGENTA + f'Inference completed at {datetime.now(pytz.utc)} UTC' + Style.RESET_ALL)
-            # print('\n')
+                print(Fore.MAGENTA + f'Table updated {datetime.now(self.tz_local)} {self.tz_local.zone}' + Style.RESET_ALL)
 
 
             # # Inference idle
